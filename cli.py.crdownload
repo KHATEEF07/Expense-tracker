@@ -1,0 +1,79 @@
+"""Command-line interface."""
+import argparse
+import sys
+from datetime import date
+
+from .db import DEFAULT_DB, ExpenseDB
+
+
+def print_table(rows):
+    if not rows:
+        print("No expenses found.")
+        return
+    print(f"{'ID':<5}{'Date':<12}{'Category':<14}{'Amount':>10}  Description")
+    print("-" * 60)
+    for r in rows:
+        print(f"{r['id']:<5}{r['date']:<12}{r['category']:<14}{r['amount']:>10.2f}  {r['description']}")
+
+
+def build_parser():
+    p = argparse.ArgumentParser(prog="expense-tracker", description="Khateef’s Expense Tracker — track your spending from the terminal.")
+    p.add_argument("--db", default=str(DEFAULT_DB), help="path to the SQLite database")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    a = sub.add_parser("add", help="add an expense")
+    a.add_argument("amount", type=float)
+    a.add_argument("category")
+    a.add_argument("-d", "--description", default="")
+    a.add_argument("--date", help="YYYY-MM-DD (default: today)")
+
+    l = sub.add_parser("list", help="list expenses")
+    l.add_argument("-c", "--category")
+    l.add_argument("-m", "--month", help="YYYY-MM")
+
+    e = sub.add_parser("edit", help="edit an expense")
+    e.add_argument("id", type=int)
+    e.add_argument("--amount", type=float)
+    e.add_argument("--category")
+    e.add_argument("--description")
+    e.add_argument("--date")
+
+    d = sub.add_parser("delete", help="delete an expense")
+    d.add_argument("id", type=int)
+
+    s = sub.add_parser("summary", help="monthly spending by category")
+    s.add_argument("-m", "--month", default=date.today().strftime("%Y-%m"), help="YYYY-MM (default: this month)")
+
+    x = sub.add_parser("export", help="export all expenses to CSV")
+    x.add_argument("file", nargs="?", default="expenses.csv")
+    return p
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    db = ExpenseDB(args.db)
+    try:
+        if args.command == "add":
+            new_id = db.add(args.amount, args.category, args.description, args.date)
+            print(f"Added expense #{new_id}.")
+        elif args.command == "list":
+            print_table(db.list(args.category, args.month))
+        elif args.command == "edit":
+            ok = db.update(args.id, args.amount, args.category, args.description, args.date)
+            print("Updated." if ok else f"Expense #{args.id} not found.")
+        elif args.command == "delete":
+            print("Deleted." if db.delete(args.id) else f"Expense #{args.id} not found.")
+        elif args.command == "summary":
+            total, rows = db.summary(args.month)
+            print(f"Summary for {args.month}")
+            for cat, amt in rows:
+                pct = amt / total * 100 if total else 0
+                print(f"  {cat:<14}{amt:>10.2f}  ({pct:.0f}%)")
+            print(f"  {'TOTAL':<14}{total:>10.2f}")
+        elif args.command == "export":
+            print(f"Exported {db.export_csv(args.file)} expenses to {args.file}.")
+    except ValueError as err:
+        print(f"Error: {err}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        db.close()

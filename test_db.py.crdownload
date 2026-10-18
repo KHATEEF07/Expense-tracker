@@ -1,0 +1,67 @@
+import csv
+
+import pytest
+
+from expense_tracker.db import ExpenseDB
+
+
+@pytest.fixture
+def db(tmp_path):
+    d = ExpenseDB(tmp_path / "test.db")
+    yield d
+    d.close()
+
+
+def test_add_and_get(db):
+    eid = db.add(12.5, "Food", "lunch", "2026-01-15")
+    row = db.get(eid)
+    assert row["amount"] == 12.5
+    assert row["category"] == "food"
+    assert row["date"] == "2026-01-15"
+
+
+def test_invalid_amount(db):
+    with pytest.raises(ValueError):
+        db.add(-5, "food")
+
+
+def test_invalid_date(db):
+    with pytest.raises(ValueError):
+        db.add(5, "food", on="15/01/2026")
+
+
+def test_list_filters(db):
+    db.add(10, "food", on="2026-01-01")
+    db.add(20, "travel", on="2026-02-01")
+    assert len(db.list()) == 2
+    assert len(db.list(category="food")) == 1
+    assert len(db.list(month="2026-02")) == 1
+
+
+def test_update_and_delete(db):
+    eid = db.add(10, "food", on="2026-01-01")
+    assert db.update(eid, amount=15, category="snacks")
+    assert db.get(eid)["amount"] == 15
+    assert db.delete(eid)
+    assert db.get(eid) is None
+    assert not db.delete(eid)
+
+
+def test_summary(db):
+    db.add(10, "food", on="2026-03-01")
+    db.add(30, "food", on="2026-03-10")
+    db.add(60, "rent", on="2026-03-05")
+    db.add(99, "food", on="2026-04-01")
+    total, rows = db.summary("2026-03")
+    assert total == 100
+    assert rows == [("rent", 60), ("food", 40)]
+
+
+def test_export_csv(db, tmp_path):
+    db.add(10, "food", "tea", "2026-01-01")
+    out = tmp_path / "out.csv"
+    assert db.export_csv(out) == 1
+    with open(out) as f:
+        rows = list(csv.reader(f))
+    assert rows[0] == ["id", "date", "category", "amount", "description"]
+    assert rows[1][2] == "food"

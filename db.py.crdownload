@@ -1,0 +1,110 @@
+"""SQLite storage layer for the expense tracker."""
+import csv
+import sqlite3
+from datetime import date, datetime
+from pathlib import Path
+
+DEFAULT_DB = Path.home() / ".expense_tracker.db"
+
+
+def parse_date(value):
+    """Return an ISO date string (YYYY-MM-DD) or raise ValueError."""
+    if value is None:
+        return date.today().isoformat()
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date().isoformat()
+    except ValueError:
+        raise ValueError(f"Invalid date '{value}'. Use YYYY-MM-DD.")
+
+
+def validate_amount(amount):
+    amount = float(amount)
+    if amount <= 0:
+        raise ValueError("Amount must be greater than zero.")
+    return round(amount, 2)
+
+
+class ExpenseDB:
+    def __init__(self, path=DEFAULT_DB):
+        self.conn = sqlite3.connect(str(path))
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute(
+            """CREATE TABLE IF NOT EXISTS expenses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                amount REAL NOT NULL,
+                category TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                date TEXT NOT NULL
+            )"""
+        )
+        self.conn.commit()
+
+    def add(self, amount, category, description="", on=None):
+        cur = self.conn.execute(
+            "INSERT INTO expenses (amount, category, description, date) VALUES (?, ?, ?, ?)",
+            (validate_amount(amount), category.strip().lower(), description, parse_date(on)),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def get(self, expense_id):
+        return self.conn.execute(
+            "SELECT * FROM expenses WHERE id = ?", (expense_id,)
+        ).fetchone()
+
+    def list(self, category=None, month=None):
+        """month format: YYYY-MM"""
+        query, params = "SELECT * FROM expenses WHERE 1=1", []
+        if category:
+            query += " AND category = ?"
+            params.append(category.strip().lower())
+        if month:
+            query += " AND substr(date, 1, 7) = ?"
+            params.append(month)
+        query += " ORDER BY date DESC, id DESC"
+        return self.conn.execute(query, params).fetchall()
+
+    def update(self, expense_id, amount=None, category=None, description=None, on=None):
+        row = self.get(expense_id)
+        if row is None:
+            return False
+        self.conn.execute(
+            "UPDATE expenses SET amount=?, category=?, description=?, date=? WHERE id=?",
+            (
+                validate_amount(amount) if amount is not None else row["amount"],
+                category.strip().lower() if category else row["category"],
+                description if description is not None else row["description"],
+                parse_date(on) if on else row["date"],
+                expense_id,
+            ),
+        )
+        self.conn.commit()
+        return True
+
+    def delete(self, expense_id):
+        cur = self.conn.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def summary(self, month):
+        """Return (total, [(category, total), ...]) for a YYYY-MM month."""
+        rows = self.conn.execute(
+            """SELECT category, ROUND(SUM(amount), 2) AS total
+               FROM expenses WHERE substr(date, 1, 7) = ?
+               GROUP BY category ORDER BY total DESC""",
+            (month,),
+        ).fetchall()
+        total = round(sum(r["total"] for r in rows), 2)
+        return total, [(r["category"], r["total"]) for r in rows]
+
+    def export_csv(self, path):
+        rows = self.list()
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["id", "date", "category", "amount", "description"])
+            for r in rows:
+                writer.writerow([r["id"], r["date"], r["category"], r["amount"], r["description"]])
+        return len(rows)
+
+    def close(self):
+        self.conn.close()
